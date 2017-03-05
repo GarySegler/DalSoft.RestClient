@@ -13,25 +13,25 @@ namespace DalSoft.RestClient.Handlers
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            if(!IsFormUrlEncodedContentType(request))
-                return null;
+            if (IsFormUrlEncodedContentType(request))
+            {
+                var content = request.GetContent();
+                request.Content = content == null ? null : new FormUrlEncodedContent(GetContent(content));
+            }
 
-            var content = request.GetContent();
-
-            if (content == null)
-                return null;
-
-            request.Content = new FormUrlEncodedContent(GetContent(content));
-
-            return await base.SendAsync(request, cancellationToken);
+            return await base.SendAsync(request, cancellationToken); //next in the pipeline
         }
 
         /// <summary>Returns a List KeyValuePair to pass into FormUrlEncodedContent supports complex objects People[0]First=Darran&amp;People[0]Last=Darran</summary>
-        private static List<KeyValuePair<string, string>> GetContent(object o, List<KeyValuePair<string, string>> nameValueCollection = null, string prefix = null)
+        private static List<KeyValuePair<string, string>> GetContent(object o, List<KeyValuePair<string, string>> nameValueCollection = null, string prefix = null, int recrusions=0)
         {
+            const int maxRecrusions = 100;
+            recrusions = prefix == null ? 0 : recrusions + 1;
+            if (recrusions> maxRecrusions) throw new InvalidOperationException("Object supplied to be UrlEncoded is nested too deeply");
+
             nameValueCollection = nameValueCollection ?? new List<KeyValuePair<string, string>>();
 
-            foreach (PropertyInfo property in o.GetType().GetProperties())
+            foreach (var property in o.GetType().GetProperties())
             {
                 var propertyName = prefix == null ? property.Name : $"{prefix}.{property.Name}";
                 var propertyValue = property.GetValue(o);
@@ -46,8 +46,11 @@ namespace DalSoft.RestClient.Handlers
                 {
                     var enumerable = ((IEnumerable)propertyValue).Cast<object>().ToArray();
 
-                    for (var i = 0; i < enumerable.Count(); i++)
+                    for (var i = 0; i < enumerable.Length; i++)
                     {
+                        if (IsValueTypeOrPrimitiveOrStringOrDateTimeOrGuid(enumerable[i].GetType().GetTypeInfo()))
+                            nameValueCollection.Add(new KeyValuePair<string, string>(propertyName, enumerable[i].ToString()));
+                        
                         foreach (var propertyItem in enumerable[i].GetType().GetProperties())
                         {
                             var propertyItemName = $"{propertyName}[{i}].{propertyItem.Name}";
@@ -61,14 +64,14 @@ namespace DalSoft.RestClient.Handlers
                             }
                             else
                             {
-                                GetContent(propertyItemValue, nameValueCollection, propertyItemName);
+                                GetContent(propertyItemValue, nameValueCollection, propertyItemName, recrusions);
                             }
                         }
                     }
                 }
                 else
                 {
-                    GetContent(property.GetValue(o), nameValueCollection, propertyName);
+                    GetContent(property.GetValue(o), nameValueCollection, propertyName, recrusions);
                 }
             }
 
